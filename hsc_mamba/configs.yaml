@@ -1,0 +1,262 @@
+config:
+    seed: 2026
+    dataset:
+        max_len: 32000
+        sampling_rate: 8000
+        data_type: "noisy_reverb"
+        scp_dir: "data_path/scp_ss_8k_whamr"
+        output_dir: "outputs/noisy_reverb/whamr"
+        train:
+            mixture: "tr_mix.scp"
+            spk1: "tr_s1.scp"
+            spk2: "tr_s2.scp"
+            dynamic_mixing: true # 保持开启，对性能至关重要
+        valid:
+            mixture: "cv_mix.scp"
+            spk1: "cv_s1.scp"
+            spk2: "cv_s2.scp"
+        test:
+            mixture: "tt_mix.scp"
+            spk1: "tt_s1.scp"
+            spk2: "tt_s2.scp"
+        profiles:
+            clean:
+                name: "wsj0-2mix"
+                condition: "clean"
+                output_dir: "outputs/clean/wsj0-2mix"
+                scp_dir: "data_path/scp_ss_8k"
+                train:
+                    mixture: "tr_mix.scp"
+                    spk1: "tr_s1.scp"
+                    spk2: "tr_s2.scp"
+                    dynamic_mixing: true
+                    speed_list: [0.9, 0.95, 1.0, 1.05, 1.1]
+                valid:
+                    mixture: "cv_mix.scp"
+                    spk1: "cv_s1.scp"
+                    spk2: "cv_s2.scp"
+                test:
+                    mixture: "tt_mix.scp"
+                    spk1: "tt_s1.scp"
+                    spk2: "tt_s2.scp"
+            libri2mix:
+                name: "libri2mix"
+                condition: "clean"
+                output_dir: "outputs/clean/libri2mix"
+                scp_dir: "data_path/scp_ss_8k_libri"
+                train:
+                    mixture: "tr_mix.scp"
+                    spk1: "tr_s1.scp"
+                    spk2: "tr_s2.scp"
+                    dynamic_mixing: false
+                    speed_list: [0.9, 0.95, 1.0, 1.05, 1.1]
+                valid:
+                    mixture: "cv_mix.scp"
+                    spk1: "cv_s1.scp"
+                    spk2: "cv_s2.scp"
+                test:
+                    mixture: "tt_mix.scp"
+                    spk1: "tt_s1.scp"
+                    spk2: "tt_s2.scp"
+            noisy:
+                name: "wham"
+                condition: "noisy"
+                output_dir: "outputs/noisy/wham"
+                scp_dir: "data_path/scp_ss_8k_wham"
+                train:
+                    mixture: "tr_mix.scp"
+                    spk1: "tr_s1.scp"
+                    spk2: "tr_s2.scp"
+                    noise: "tr_n.scp"
+                    dynamic_mixing: true
+                    speed_list: [0.9, 0.95, 1.0, 1.05, 1.1]
+                valid:
+                    mixture: "cv_mix.scp"
+                    spk1: "cv_s1.scp"
+                    spk2: "cv_s2.scp"
+                test:
+                    mixture: "tt_mix.scp"
+                    spk1: "tt_s1.scp"
+                    spk2: "tt_s2.scp"
+            noisy_reverb:
+                name: "whamr"
+                condition: "noisy_reverb"
+                output_dir: "outputs/noisy_reverb/whamr"
+                scp_dir: "data_path/scp_ss_8k_whamr"
+                train:
+                    mixture: "tr_mix.scp"
+                    spk1: "tr_s1.scp"
+                    spk2: "tr_s2.scp"
+                    spk1_reverb: "tr_s1_reverb.scp"
+                    spk2_reverb: "tr_s2_reverb.scp"
+                    noise: "tr_n.scp"
+                    dynamic_mixing: true
+                    speed_list: [0.9, 0.95, 1.0, 1.05, 1.1]
+                valid:
+                    mixture: "cv_mix.scp"
+                    spk1: "cv_s1.scp"
+                    spk2: "cv_s2.scp"
+                test:
+                    mixture: "tt_mix.scp"
+                    spk1: "tt_s1.scp"
+                    spk2: "tt_s2.scp"
+    dataloader:
+        batch_size: 2
+        pin_memory: true
+        num_workers: 0
+        drop_last: false
+    model:
+        num_stages: &var_model_num_stages 4 # R
+        num_spks: &var_model_num_spks 2
+        module_audio_enc:
+            in_channels: 1
+            out_channels: &var_model_audio_enc_out_channels 256
+            kernel_size: &var_model_audio_enc_kernel_size 16 # L
+            stride: &var_model_audio_enc_stride 4 # S
+            groups: 1
+            bias: false
+            # ==================================
+            # [新增] FFT-SSM 的超参数
+            # ==================================
+            num_coeffs: 16
+            repeat: 8
+        module_feature_projector:
+            num_channels: *var_model_audio_enc_out_channels 
+            in_channels: *var_model_audio_enc_out_channels
+            out_channels: &feature_projector_out_channels 256 # F
+            kernel_size: 1
+            bias: false
+        module_separator:
+            num_stages: *var_model_num_stages
+            enc_stage:
+                global_blocks:
+                    in_channels: *feature_projector_out_channels
+                    n_mamba: 1
+                    bidirectional: true
+                    d_state: 64
+                    expand: 2
+                    d_conv: 4
+                    fused_add_norm: false
+                    rms_norm: true
+                local_blocks:
+                    in_channels: *feature_projector_out_channels
+                    kernel_size: 17
+                    expand: 2
+                    dropout: 0.1
+                down_conv_layer:
+                    in_channels: *feature_projector_out_channels
+                    samp_kernel_size: &var_model_samp_kernel_size 5
+            spk_split_stage:
+                in_channels: *feature_projector_out_channels
+                num_spks: *var_model_num_spks
+            simple_fusion:
+                out_channels: *feature_projector_out_channels
+            hierarchical_early_separation:
+                enabled: true
+                policy: "HSES"
+                split_weight_bounds:
+                    D4: [0.00, 1.00]
+                    D3: [0.00, 1.00]
+                    D2: [0.00, 1.00]
+                    D1: [0.00, 1.00]
+                split_weight_init:
+                    D4: 0.9
+                    D3: 0.6
+                    D2: 0.3
+                    D1: 0.1
+            conservative_pair_coupled_mamba:
+                enabled: true
+                apply_locations: ["after_bottleneck_split"]
+                hidden_channels: 256
+                n_mamba: 1
+                bidirectional: true
+                d_state: 64
+                expand: 2
+                d_conv: 4
+                fused_add_norm: false
+                rms_norm: true
+                dropout: 0.0
+                residual_scale_init: 0.015
+                residual_scale_max: 0.08
+                residual_scale_learnable: true
+                confidence_gate_hidden_channels: 64
+                confidence_gate_zero_init: true
+                confidence_gate_bias_init: 0.0
+                presence_temperature: 1.0
+                confidence_min: 0.2
+                use_relation_norm: true
+                rho_ramp_epochs: 10
+                zero_init_output: true
+                log_stats: false
+            dec_stage:
+                num_spks: *var_model_num_spks
+                global_blocks:
+                    in_channels: *feature_projector_out_channels
+                    n_mamba: 1
+                    bidirectional: true
+                    d_state: 64
+                    expand: 2
+                    d_conv: 4
+                    fused_add_norm: false
+                    rms_norm: true
+                local_blocks:
+                    in_channels: *feature_projector_out_channels
+                    kernel_size: 17
+                    expand: 2 
+                    dropout: 0.1
+                spk_attention:
+                    in_channels: *feature_projector_out_channels
+                    num_mha_heads: 8
+                    dropout_rate: 0.1
+        module_output_layer:
+            in_channels: *var_model_audio_enc_out_channels
+            out_channels: *feature_projector_out_channels
+            num_spks: *var_model_num_spks
+        module_audio_dec:
+            in_channels: *var_model_audio_enc_out_channels
+            out_channels: 1
+            kernel_size: *var_model_audio_enc_kernel_size
+            stride: *var_model_audio_enc_stride
+            bias: false
+    criterion:
+        name: ["PIT_SISNR_mag", "PIT_HybridLoss", "PIT_SISNRi", "PIT_SDRi"] 
+        PIT_SISNR_mag:
+            frame_length: 512
+            frame_shift: 128
+            window: 'hann'
+            num_stages: *var_model_num_stages
+            num_spks: *var_model_num_spks
+            scale_inv: true
+            mel_opt: false
+        PIT_HybridLoss:
+            device: 'cuda' 
+            num_spks: *var_model_num_spks
+            scale_inv: true
+            stft_weight: 0.1
+        PIT_SISNRi:
+            num_spks: *var_model_num_spks
+            scale_inv: true
+        PIT_SDRi:
+            dump: 0
+    optimizer:
+        name: ["AdamW"] 
+        AdamW:
+            lr: 0.0003
+            weight_decay: 0.01
+    scheduler:
+        name: ["FixedEpochStepLR", "WarmupConstantSchedule"]
+        FixedEpochStepLR:
+            hold_epochs: 60
+            step_size: 10
+            gamma: 0.8
+            min_lr: 0.00001
+        WarmupConstantSchedule:
+            warmup_steps: 1000
+    engine:
+        max_epoch: 200
+        precision: "bf16-mixed"
+        gpuid: "0" 
+        mvn: false
+        clip_norm: 5
+        start_scheduling: 1
+        wandb_name: "HSC-Mamba"
